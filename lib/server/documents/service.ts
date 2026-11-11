@@ -1,6 +1,7 @@
 import {
   documentNotFound,
   memberNotFound,
+  conflict,
   sharingSelfNotAllowed,
   userNotFound,
   validationError,
@@ -127,9 +128,25 @@ export async function readDocument(
 export async function updateDocument(
   principal: Principal,
   documentId: string,
-  input: { title?: unknown; content?: unknown },
+  input: { title?: unknown; content?: unknown; expectedUpdatedAt?: unknown },
 ): Promise<DocumentDto> {
   const access = await requireDocumentAccess(documentId, principal, 'write');
+
+  let expectedUpdatedAt: Date | undefined;
+  if (input.expectedUpdatedAt !== undefined) {
+    if (typeof input.expectedUpdatedAt !== 'string') {
+      throw validationError('expectedUpdatedAt must be an ISO timestamp.', { fields: ['expectedUpdatedAt'] });
+    }
+    expectedUpdatedAt = new Date(input.expectedUpdatedAt);
+    if (!Number.isFinite(expectedUpdatedAt.getTime())) {
+      throw validationError('expectedUpdatedAt must be an ISO timestamp.', { fields: ['expectedUpdatedAt'] });
+    }
+    if (expectedUpdatedAt.getTime() !== access.document.updatedAt.getTime()) {
+      throw conflict('This document changed after you opened it. Copy your unsaved edits, then load the latest version.', {
+        updatedAt: access.document.updatedAt.toISOString(),
+      });
+    }
+  }
 
   const patch: { title?: string; content?: TipTapDoc } = {};
   if (input.title !== undefined) patch.title = normalizeTitle(input.title);
@@ -141,8 +158,11 @@ export async function updateDocument(
     });
   }
 
-  const updated = await repository.updateDocumentRow(documentId, patch);
+  const updated = await repository.updateDocumentRow(documentId, patch, expectedUpdatedAt);
   if (!updated) {
+    if (expectedUpdatedAt) {
+      throw conflict('This document changed while your edits were saving. Copy your unsaved edits, then load the latest version.');
+    }
     // The document was deleted between the access check and the write.
     throw documentNotFound();
   }
@@ -284,3 +304,4 @@ function normalizeRole(input: unknown): DocumentRole {
   }
   return input;
 }
+
