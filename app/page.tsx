@@ -105,10 +105,23 @@ function readInline(node: Node, root: Element): TipTapNode[] {
   if (!(node instanceof Element)) return [];
   const tag = node.tagName.toLowerCase();
   if (tag === 'br') return [{ type: 'hardBreak' }];
-  if (tag === 'ul' || tag === 'ol' || tag === 'li' || tag === 'p' || /^h[1-3]$/.test(tag) || tag === 'blockquote' || tag === 'pre') return [];
+  // The root is the block we're intentionally reading (for example the <h2> passed
+  // by readBlocks). Only stop when a *nested* block is encountered. Previously this
+  // rejected the root heading/paragraph too, so autosave serialized formatted text as
+  // an empty node and overwrote the shared document in the database.
+  if (node !== root && (
+    tag === 'div' || tag === 'ul' || tag === 'ol' || tag === 'li' || tag === 'p' ||
+    /^h[1-6]$/.test(tag) || tag === 'blockquote' || tag === 'pre'
+  )) return [];
   const out: TipTapNode[] = [];
   node.childNodes.forEach((child) => out.push(...readInline(child, root)));
   return out;
+}
+
+function isBlockElement(element: Element): boolean {
+  const tag = element.tagName.toLowerCase();
+  return tag === 'div' || tag === 'p' || /^h[1-6]$/.test(tag) ||
+    tag === 'ul' || tag === 'ol' || tag === 'blockquote' || tag === 'pre' || tag === 'hr';
 }
 
 function readBlocks(parent: ParentNode): TipTapNode[] {
@@ -131,6 +144,9 @@ function readBlocks(parent: ParentNode): TipTapNode[] {
       nodes.push({ type: 'codeBlock', content: [{ type: 'text', text: child.textContent ?? '' }] });
     } else if (tag === 'hr') {
       nodes.push({ type: 'horizontalRule' });
+    } else if (tag === 'div' && Array.from(child.children).some(isBlockElement)) {
+      // Some browsers wrap formatted content in an extra editable <div>.
+      nodes.push(...readBlocks(child));
     } else if (tag === 'div' || tag === 'p') {
       const children = readInline(child, child);
       nodes.push({ type: 'paragraph', content: children.length ? children : undefined });
@@ -484,7 +500,7 @@ export default function Page() {
           <div className="document-meta"><span className={active.ownership === 'shared' ? 'ownership-chip shared' : 'ownership-chip'}>{active.ownership === 'shared' ? '↗ Shared with you' : '◈ Your document'}</span><span className="meta-dot">·</span><span>{active.role === 'owner' ? 'Owner' : active.role === 'editor' ? 'Can edit' : 'View only'}</span><span className="meta-spacer"/><button className="import-button" onClick={() => fileRef.current?.click()} disabled={active.role === 'viewer' || busy}><Icon name="upload" /> Import</button><input ref={fileRef} type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" hidden onChange={(event) => void chooseFile(event)} /></div>
           <input ref={titleInputRef} className="title-input" value={title} maxLength={200} onChange={(event) => handleTitleChange(event.target.value)} readOnly={active.role === 'viewer'} aria-label="Document title" placeholder="Untitled document" />
           <div className="editor-toolbar" aria-label="Formatting toolbar">
-            <select aria-label="Text style" defaultValue="paragraph" disabled={active.role === 'viewer'} onChange={(event) => runFormat({ preventDefault: () => undefined } as ReactMouseEvent<HTMLButtonElement>, 'formatBlock', event.target.value)}><option value="p">Paragraph</option><option value="h2">Heading 1</option><option value="h3">Heading 2</option></select>
+            <select aria-label="Text style" defaultValue="p" disabled={active.role === 'viewer'} onChange={(event) => runFormat({ preventDefault: () => undefined } as ReactMouseEvent<HTMLButtonElement>, 'formatBlock', event.target.value)}><option value="p">Paragraph</option><option value="h1">Heading 1</option><option value="h2">Heading 2</option></select>
             <span className="toolbar-divider"/>
             <button onMouseDown={(event) => runFormat(event, 'bold')} disabled={active.role === 'viewer'} aria-label="Bold"><b>B</b></button><button onMouseDown={(event) => runFormat(event, 'italic')} disabled={active.role === 'viewer'} aria-label="Italic"><i>I</i></button><button onMouseDown={(event) => runFormat(event, 'underline')} disabled={active.role === 'viewer'} aria-label="Underline"><u>U</u></button>
             <span className="toolbar-divider"/>
