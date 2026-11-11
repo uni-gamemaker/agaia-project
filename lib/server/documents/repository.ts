@@ -54,11 +54,14 @@ export async function insertDocument(input: {
 export async function updateDocumentRow(
   id: string,
   patch: { title?: string; content?: TipTapDoc },
+  expectedUpdatedAt?: Date,
 ): Promise<Document | null> {
+  const conditions = [eq(schema.documents.id, id)];
+  if (expectedUpdatedAt) conditions.push(eq(schema.documents.updatedAt, expectedUpdatedAt));
   const [row] = await getDb()
     .update(schema.documents)
     .set({ ...patch, updatedAt: new Date() })
-    .where(eq(schema.documents.id, id))
+    .where(and(...conditions))
     .returning();
   return row ?? null;
 }
@@ -188,3 +191,4 @@ export async function deleteMember(documentId: string, userId: string): Promise<
     .returning({ id: schema.documentMembers.id });
   return rows.length > 0;
 }
+
