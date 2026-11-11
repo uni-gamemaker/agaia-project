@@ -111,7 +111,11 @@ function readInline(node: Node, root: Element): TipTapNode[] {
   // rejected the root heading/paragraph too, so autosave serialized formatted text as
   // an empty node and overwrote the shared document in the database.
   if (node !== root && (
-    tag === 'div' || tag === 'ul' || tag === 'ol' || tag === 'li' || tag === 'p' ||
+    // A browser can wrap the text inside a formatted heading in a <div>. Since
+    // this routine is already reading one block, descend through that wrapper;
+    // otherwise the heading is saved with empty content. Other nested blocks
+    // remain boundaries and are handled by readBlocks.
+    tag === 'ul' || tag === 'ol' || tag === 'li' || tag === 'p' ||
     /^h[1-6]$/.test(tag) || tag === 'blockquote' || tag === 'pre'
   )) return [];
   const out: TipTapNode[] = [];
