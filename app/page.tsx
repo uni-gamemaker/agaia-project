@@ -194,10 +194,13 @@ export default function Page() {
   const [owner, setOwner] = useState<Member | null>(null);
   const [loading, setLoading] = useState(true);
   const editorRef = useRef<HTMLDivElement>(null);
+  const activeRef = useRef<DocumentData | null>(active);
+  activeRef.current = active;
   const fileRef = useRef<HTMLInputElement>(null);
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pending = useRef<{ id: string; title: string; content: TipTapDoc } | null>(null);
+  const saveTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const pending = useRef(new Map<string, { id: string; title: string; content: TipTapDoc; baseUpdatedAt: string }>());
   const drainPromise = useRef<Promise<void> | null>(null);
+  const openSequence = useRef(0);
   const titleInputRef = useRef<HTMLInputElement>(null);
 
   const refreshList = useCallback(async () => {
@@ -206,27 +209,33 @@ export default function Page() {
   }, []);
 
   const openDocument = useCallback(async (item: DocumentItem) => {
+    const sequence = ++openSequence.current;
     setError('');
     setSaveState('idle');
     try {
       const doc = await api<DocumentData>(`/api/documents/${item.id}`);
+      if (sequence !== openSequence.current) return;
       const savedDraft = doc.role === 'viewer' ? null : localStorage.getItem(`ajaia-draft-${doc.id}`);
       if (savedDraft) {
         try {
-          const draft = JSON.parse(savedDraft) as { title?: string; content?: TipTapDoc };
-          if (draft.content?.type === 'doc') {
+          const draft = JSON.parse(savedDraft) as { title?: string; content?: TipTapDoc; baseUpdatedAt?: string };
+          // A device draft is safe to replay only against the exact server version it
+          // was created from. Otherwise it could erase a collaborator's newer edits.
+          if (draft.content?.type === 'doc' && draft.baseUpdatedAt === doc.updatedAt) {
             doc.content = draft.content;
             if (typeof draft.title === 'string') doc.title = draft.title;
-            pending.current = { id: doc.id, title: doc.title, content: doc.content };
+            pending.current.set(doc.id, { id: doc.id, title: doc.title, content: doc.content, baseUpdatedAt: doc.updatedAt });
             setSaveState('failed');
             setError('An unsaved draft from this device is open. Retry to sync it.');
+          } else if (draft.baseUpdatedAt !== doc.updatedAt) {
+            setError('A local draft was not restored because this document changed on the server. The saved server version is open.');
           }
-        } catch { localStorage.removeItem(`ajaia-draft-${doc.id}`); }
+        } catch { /* Keep malformed drafts for recovery; the server copy stays authoritative. */ }
       }
       setActive(doc);
       setTitle(doc.title);
-      setTimeout(() => { if (editorRef.current) editorRef.current.innerHTML = toHtml(doc.content); }, 0);
     } catch (reason) {
+      if (sequence !== openSequence.current) return;
       setError(reason instanceof Error ? reason.message : 'Could not open document.');
     }
   }, []);
@@ -294,41 +303,43 @@ export default function Page() {
   };
 
   const signOut = async () => {
+    openSequence.current += 1;
     try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* Clear the local session view either way. */ }
     setUser(null); setDocuments([]); setActive(null); setTitle(''); setSaveState('idle');
   };
 
   const createDocument = async () => {
+    const sequence = ++openSequence.current;
     setBusy(true); setError('');
     try {
       const doc = await api<DocumentData>('/api/documents', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: 'Untitled document', content: EMPTY_DOC }),
       });
-      setDocuments((current) => [doc, ...current]); setActive(doc); setTitle(doc.title); setSaveState('saved');
-      if (editorRef.current) editorRef.current.innerHTML = toHtml(doc.content);
+      setDocuments((current) => [doc, ...current]);
+      if (sequence !== openSequence.current) return;
+      setActive(doc); setTitle(doc.title); setSaveState('saved');
       setTimeout(() => editorRef.current?.focus(), 0);
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not create document.'); }
     finally { setBusy(false); }
   };
 
-  const activeDocumentId = active?.id;
-  const persist = useCallback((item: { id: string; title: string; content: TipTapDoc }): Promise<void> => {
-    pending.current = item;
+  const persist = useCallback((item: { id: string; title: string; content: TipTapDoc; baseUpdatedAt: string }): Promise<void> => {
+    pending.current.set(item.id, item);
     if (drainPromise.current) return drainPromise.current;
 
     const drain = async () => {
-      while (pending.current) {
-        const current = pending.current;
-        pending.current = null;
-        if (activeDocumentId === current.id) { setSaveState('saving'); setError(''); }
+      while (pending.current.size) {
+        const [id, current] = pending.current.entries().next().value as [string, { id: string; title: string; content: TipTapDoc; baseUpdatedAt: string }];
+        pending.current.delete(id);
+        if (activeRef.current?.id === current.id) { setSaveState('saving'); setError(''); }
         try {
           const updated = await api<DocumentData>(`/api/documents/${current.id}`, {
             method: 'PATCH', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title: current.title, content: current.content }),
           });
-          const queuedAfterRequest = pending.current as { id: string; title: string; content: TipTapDoc } | null;
-          const hasNewerDraft = queuedAfterRequest?.id === current.id;
+          const queuedAfterRequest = pending.current.get(current.id);
+          const hasNewerDraft = Boolean(queuedAfterRequest);
           setActive((latest) => latest?.id === updated.id
             ? (hasNewerDraft ? latest : { ...updated })
             : latest);
@@ -336,64 +347,85 @@ export default function Page() {
             ? { ...doc, title: updated.title, updatedAt: updated.updatedAt }
             : doc));
           if (!hasNewerDraft) {
-            if (activeDocumentId === current.id) setSaveState('saved');
+            if (activeRef.current?.id === current.id) setSaveState('saved');
             localStorage.removeItem(`ajaia-draft-${current.id}`);
+          } else {
+            const queued = pending.current.get(current.id)!;
+            const rebased = { ...queued, baseUpdatedAt: updated.updatedAt };
+            pending.current.set(current.id, rebased);
+            try { localStorage.setItem(`ajaia-draft-${current.id}`, JSON.stringify({ title: rebased.title, content: rebased.content, baseUpdatedAt: rebased.baseUpdatedAt })); } catch { /* In-memory queue remains available. */ }
           }
         } catch (reason) {
-          const queuedAfterFailure = pending.current as { id: string; title: string; content: TipTapDoc } | null;
-          if (!queuedAfterFailure || queuedAfterFailure.id !== current.id) pending.current = current;
-          if (activeDocumentId === current.id) {
+          // Keep the recoverable local draft, but stop this document from blocking
+          // saves queued for other documents. Retry is explicit for this version.
+          pending.current.delete(current.id);
+          const timer = saveTimers.current.get(current.id);
+          if (timer) clearTimeout(timer);
+          saveTimers.current.delete(current.id);
+          if (activeRef.current?.id === current.id) {
             setSaveState('failed');
             setError(reason instanceof Error ? reason.message : 'Save failed. Your draft is still here.');
           }
-          break;
         }
       }
     };
 
     const running = drain().finally(() => {
       drainPromise.current = null;
+      // If a save failed, leave it queued for the user's Retry action. If a
+      // different document was queued while this drain was finishing, start it.
+      if (pending.current.size && saveTimers.current.size === 0) {
+        const next = [...pending.current.values()][0];
+        void persistRef.current(next);
+      }
     });
     drainPromise.current = running;
     return running;
-  }, [activeDocumentId]);
+  }, []);
+  const persistRef = useRef(persist);
+  persistRef.current = persist;
   const queueSave = useCallback((nextTitle: string, nextContent: TipTapDoc) => {
     if (!active || active.role === 'viewer') return;
-    const item = { id: active.id, title: nextTitle.trim() || 'Untitled document', content: nextContent };
-    pending.current = item;
-    try { localStorage.setItem(`ajaia-draft-${active.id}`, JSON.stringify({ title: item.title, content: item.content })); } catch { /* The in-memory draft is still available for retry. */ }
+    const item = { id: active.id, title: nextTitle.trim() || 'Untitled document', content: nextContent, baseUpdatedAt: active.updatedAt };
+    pending.current.set(active.id, item);
+    try { localStorage.setItem(`ajaia-draft-${active.id}`, JSON.stringify({ title: item.title, content: item.content, baseUpdatedAt: item.baseUpdatedAt })); } catch { /* The in-memory draft is still available for retry. */ }
     setSaveState('saving');
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => { saveTimer.current = null; void persist(item); }, 750);
+    const timer = saveTimers.current.get(active.id);
+    if (timer) clearTimeout(timer);
+    saveTimers.current.set(active.id, setTimeout(() => { saveTimers.current.delete(active.id); void persist(item); }, 750));
   }, [active, persist]);
 
   const retryCurrentSave = () => {
     if (!active || active.role === 'viewer') return;
-    const item = pending.current?.id === active.id
-      ? pending.current
-      : { id: active.id, title: title.trim() || 'Untitled document', content: active.content };
-    pending.current = item;
+    const timer = saveTimers.current.get(active.id);
+    if (timer) clearTimeout(timer);
+    saveTimers.current.delete(active.id);
+    const item = pending.current.get(active.id)
+      ?? { id: active.id, title: title.trim() || 'Untitled document', content: active.content, baseUpdatedAt: active.updatedAt };
+    pending.current.set(active.id, item);
     void persist(item);
   };
 
   const saveNow = async () => {
     if (!active || active.role === 'viewer') return;
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = null;
+    const timer = saveTimers.current.get(active.id);
+    if (timer) clearTimeout(timer);
+    saveTimers.current.delete(active.id);
     const content = editorRef.current ? fromHtml(editorRef.current.innerHTML) : active.content;
-    const item = { id: active.id, title: title.trim() || 'Untitled document', content };
-    pending.current = item;
-    try { localStorage.setItem(`ajaia-draft-${active.id}`, JSON.stringify({ title: item.title, content })); } catch { /* Keep the in-memory copy for retry. */ }
+    const item = { id: active.id, title: title.trim() || 'Untitled document', content, baseUpdatedAt: active.updatedAt };
+    pending.current.set(active.id, item);
+    try { localStorage.setItem(`ajaia-draft-${active.id}`, JSON.stringify({ title: item.title, content, baseUpdatedAt: item.baseUpdatedAt })); } catch { /* Keep the in-memory copy for retry. */ }
     await persist(item);
   };
 
-  useEffect(() => () => { if (saveTimer.current) clearTimeout(saveTimer.current); }, []);
+  useEffect(() => () => { for (const timer of saveTimers.current.values()) clearTimeout(timer); }, []);
 
   const handleTitleChange = (value: string) => { setTitle(value); if (active) queueSave(value, active.content); };
   const handleEditorInput = () => {
     if (!editorRef.current || !active) return;
     const content = fromHtml(editorRef.current.innerHTML);
-    setActive((current) => current ? { ...current, content } : current);
+    const editingId = active.id;
+    setActive((current) => current?.id === editingId ? { ...current, content } : current);
     queueSave(title, content);
   };
 
@@ -408,12 +440,14 @@ export default function Page() {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
+    const sequence = ++openSequence.current;
     setBusy(true); setError('');
     const form = new FormData(); form.append('file', file);
     try {
       const doc = await api<DocumentData>('/api/documents/import', { method: 'POST', body: form });
-      setDocuments((current) => [doc, ...current]); setActive(doc); setTitle(doc.title); setSaveState('saved');
-      if (editorRef.current) editorRef.current.innerHTML = toHtml(doc.content);
+      setDocuments((current) => [doc, ...current]);
+      if (sequence !== openSequence.current) return;
+      setActive(doc); setTitle(doc.title); setSaveState('saved');
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Import failed.'); }
     finally { setBusy(false); }
   };
@@ -515,3 +549,4 @@ export default function Page() {
     </main>
   );
 }
+
