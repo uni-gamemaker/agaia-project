@@ -31,6 +31,7 @@ export const PATCH = route(async (req: Request, { params }: DocumentContext) => 
   const document = await updateDocument(principal, id, {
     title: body.title,
     content: body.content,
+    expectedUpdatedAt: body.expectedUpdatedAt,
   });
   return jsonResponse(document);
 });
@@ -42,3 +43,4 @@ export const DELETE = route(async (req: Request, { params }: DocumentContext) =>
   await deleteDocument(principal, id);
   return noContentResponse();
 });
+
