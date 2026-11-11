@@ -17,6 +17,7 @@ type DocumentItem = {
 };
 type DocumentData = DocumentItem & { content: TipTapDoc };
 type SaveState = 'idle' | 'saving' | 'saved' | 'failed' | 'conflict';
+type RecoveryDraft = { documentId: string; title: string; content: TipTapDoc };
 type Member = { userId: string; email: string; displayName: string; role: Role; createdAt: string };
 
 class ApiRequestError extends Error {
@@ -185,6 +186,7 @@ export default function Page() {
   const [query, setQuery] = useState('');
   const [title, setTitle] = useState('');
   const [saveState, setSaveState] = useState<SaveState>('idle');
+  const [recoveryDraft, setRecoveryDraft] = useState<RecoveryDraft | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
@@ -222,12 +224,16 @@ export default function Page() {
           // A device draft is safe to replay only against the exact server version it
           // was created from. Otherwise it could erase a collaborator's newer edits.
           if (draft.content?.type === 'doc' && draft.baseUpdatedAt === doc.updatedAt) {
+            setRecoveryDraft(null);
             doc.content = draft.content;
             if (typeof draft.title === 'string') doc.title = draft.title;
             pending.current.set(doc.id, { id: doc.id, title: doc.title, content: doc.content, baseUpdatedAt: doc.updatedAt });
             setSaveState('failed');
             setError('An unsaved draft from this device is open. Retry to sync it.');
           } else if (draft.baseUpdatedAt !== doc.updatedAt) {
+            if (draft.content?.type === 'doc') {
+              setRecoveryDraft({ documentId: doc.id, title: draft.title ?? doc.title, content: draft.content });
+            }
             setError('A local draft was not restored because this document changed on the server. The saved server version is open.');
           }
         } catch { /* Keep malformed drafts for recovery; the server copy stays authoritative. */ }
@@ -305,7 +311,7 @@ export default function Page() {
   const signOut = async () => {
     openSequence.current += 1;
     try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* Clear the local session view either way. */ }
-    setUser(null); setDocuments([]); setActive(null); setTitle(''); setSaveState('idle');
+    setUser(null); setDocuments([]); setActive(null); setTitle(''); setSaveState('idle'); setRecoveryDraft(null);
   };
 
   const createDocument = async () => {
@@ -491,7 +497,11 @@ export default function Page() {
   const statusText = saveState === 'saving' ? 'Saving…' : saveState === 'failed' ? 'Save failed' : saveState === 'conflict' ? 'Newer version' : saveState === 'saved' ? 'Saved' : ' ';
 
   const copyUnsavedDraft = async () => {
-    const text = `${title}\n\n${editorRef.current?.innerText ?? ''}`;
+    const staleDraft = active && recoveryDraft?.documentId === active.id ? recoveryDraft : null;
+    const draftText = staleDraft
+      ? new DOMParser().parseFromString(toHtml(staleDraft.content), 'text/html').body.innerText
+      : editorRef.current?.innerText ?? '';
+    const text = `${staleDraft?.title ?? title}\n\n${draftText}`;
     try {
       await navigator.clipboard.writeText(text);
       setError('Your unsaved draft was copied. Load the latest version when you are ready.');
@@ -544,7 +554,7 @@ export default function Page() {
 
       <section className="main-panel">
         <header className="topbar"><div className="breadcrumb">Workspace <span>/</span> {active?.ownership === 'shared' ? 'Shared with me' : 'My documents'}{active && <><span>/</span><b>{active.title || 'Untitled document'}</b></>}</div><div className="topbar-actions">{active && active.role !== 'viewer' && <><button className="rename-button" onClick={() => { titleInputRef.current?.focus(); titleInputRef.current?.select(); }} disabled={saveState === 'conflict'} aria-label="Rename document">Rename</button><button className="save-button" onClick={() => void saveNow()} disabled={saveState === 'conflict'} aria-label="Save document">Save</button></>}<span className={`save-indicator ${saveState}`}>{saveState === 'saving' && <i />}{statusText}</span>{saveState === 'failed' && <button className="retry-button" onClick={retryCurrentSave}><Icon name="retry" /> Retry</button>}{active && <button className="share-button" onClick={() => void showSharing()}><Icon name="share" /> Share</button>}<button className="avatar avatar-small" title={user.displayName}>{user.displayName.slice(0, 1).toUpperCase()}</button></div></header>
-        {error && <div className="inline-error" role="alert"><span>{error}</span>{saveState === 'conflict' && <><button className="conflict-action" onClick={() => void copyUnsavedDraft()}>Copy my draft</button><button className="conflict-action" onClick={() => active && void openDocument(active)}>Load latest</button></>}<button onClick={() => setError('')} aria-label="Dismiss"><Icon name="close" /></button></div>}
+        {error && <div className="inline-error" role="alert"><span>{error}</span>{(saveState === 'conflict' || recoveryDraft?.documentId === active?.id) && <button className="conflict-action" onClick={() => void copyUnsavedDraft()}>Copy local draft</button>}{saveState === 'conflict' && <button className="conflict-action" onClick={() => active && void openDocument(active)}>Load latest</button>}<button onClick={() => setError('')} aria-label="Dismiss"><Icon name="close" /></button></div>}
         {active ? <div className="editor-scroll"><article className="document-sheet">
           <div className="document-meta"><span className={active.ownership === 'shared' ? 'ownership-chip shared' : 'ownership-chip'}>{active.ownership === 'shared' ? '↗ Shared with you' : '◈ Your document'}</span><span className="meta-dot">·</span><span>{active.role === 'owner' ? 'Owner' : active.role === 'editor' ? 'Can edit' : 'View only'}</span><span className="meta-spacer"/><button className="import-button" onClick={() => fileRef.current?.click()} disabled={active.role === 'viewer' || busy}><Icon name="upload" /> Import</button><input ref={fileRef} type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" hidden onChange={(event) => void chooseFile(event)} /></div>
           <input ref={titleInputRef} className="title-input" value={title} maxLength={200} onChange={(event) => handleTitleChange(event.target.value)} readOnly={active.role === 'viewer' || saveState === 'conflict'} aria-label="Document title" placeholder="Untitled document" />
