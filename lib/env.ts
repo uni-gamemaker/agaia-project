@@ -19,7 +19,6 @@ export function loadEnv(): void {
     if (!existsSync(path)) continue;
     try {
       process.loadEnvFile(path);
-      return;
     } catch {
       // ignore malformed/missing env file and fall through
     }

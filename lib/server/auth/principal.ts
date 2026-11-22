@@ -1,5 +1,6 @@
 import { unauthenticated } from '@/lib/server/http/errors';
 import { findUserBySessionToken, SESSION_COOKIE_NAME } from './session';
+import { betterAuthInstance } from './better-auth';
 
 /**
  * Identity resolution — **CLAUDE-OWNED SEAM**.
@@ -39,6 +40,16 @@ export function readCookie(header: string | null, name: string): string | null {
  * Resolves the acting user for a request, or null when there is no valid session.
  */
 export async function resolvePrincipal(req: Request): Promise<Principal | null> {
+  const authSession = await betterAuthInstance.api.getSession({ headers: req.headers });
+  if (authSession?.user?.emailVerified) {
+    return {
+      userId: authSession.user.id,
+      email: authSession.user.email,
+      displayName: authSession.user.name,
+    };
+  }
+  // Keep the old server-side cookie path solely for explicitly enabled demo accounts.
+  if (process.env.DEMO_MODE !== 'true') return null;
   const token = readCookie(req.headers.get('cookie'), SESSION_COOKIE_NAME);
   if (!token) return null;
   return findUserBySessionToken(token);

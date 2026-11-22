@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { sql } from 'drizzle-orm';
 import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import type { TipTapDoc } from '@/lib/tiptap';
 
@@ -15,7 +16,10 @@ export const users = sqliteTable(
     id: id('id'),
     email: text('email').notNull(),
     displayName: text('display_name').notNull(),
+    emailVerified: integer('email_verified', { mode: 'boolean' }).notNull().default(false),
+    image: text('image'),
     createdAt: date('created_at'),
+    updatedAt: date('updated_at').notNull().default(sql`0`),
   },
   (t) => [uniqueIndex('users_email_key').on(t.email)],
 );
@@ -34,6 +38,55 @@ export const sessions = sqliteTable(
     uniqueIndex('sessions_token_hash_key').on(t.tokenHash),
     index('sessions_user_id_idx').on(t.userId),
   ],
+);
+
+/** Better Auth session/account/verification storage stays separate from legacy demo sessions. */
+export const authSessions = sqliteTable(
+  'auth_sessions',
+  {
+    id: id('id'),
+    userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    token: text('token').notNull(),
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    createdAt: date('created_at'),
+    updatedAt: date('updated_at').notNull().$defaultFn(() => new Date()),
+  },
+  (t) => [uniqueIndex('auth_sessions_token_key').on(t.token), index('auth_sessions_user_id_idx').on(t.userId)],
+);
+
+export const authAccounts = sqliteTable(
+  'auth_accounts',
+  {
+    id: id('id'),
+    userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    accountId: text('account_id').notNull(),
+    providerId: text('provider_id').notNull(),
+    accessToken: text('access_token'),
+    refreshToken: text('refresh_token'),
+    idToken: text('id_token'),
+    accessTokenExpiresAt: integer('access_token_expires_at', { mode: 'timestamp_ms' }),
+    refreshTokenExpiresAt: integer('refresh_token_expires_at', { mode: 'timestamp_ms' }),
+    scope: text('scope'),
+    password: text('password'),
+    createdAt: date('created_at'),
+    updatedAt: date('updated_at').notNull().$defaultFn(() => new Date()),
+  },
+  (t) => [index('auth_accounts_user_id_idx').on(t.userId)],
+);
+
+export const authVerifications = sqliteTable(
+  'auth_verifications',
+  {
+    id: id('id'),
+    identifier: text('identifier').notNull(),
+    value: text('value').notNull(),
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+    createdAt: date('created_at'),
+    updatedAt: date('updated_at').notNull().$defaultFn(() => new Date()),
+  },
+  (t) => [index('auth_verifications_identifier_idx').on(t.identifier)],
 );
 
 export const documents = sqliteTable(

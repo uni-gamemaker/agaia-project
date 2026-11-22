@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, ClipboardEvent as ReactClipboardEvent, FormEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import type { TipTapDoc, TipTapNode } from '@/lib/tiptap';
+import { authClient } from '@/lib/auth-client';
 
 type User = { userId: string; email: string; displayName: string };
 type Role = 'owner' | 'editor' | 'viewer';
@@ -19,6 +20,7 @@ type DocumentData = DocumentItem & { content: TipTapDoc };
 type SaveState = 'idle' | 'saving' | 'saved' | 'failed' | 'conflict';
 type RecoveryDraft = { documentId: string; title: string; content: TipTapDoc };
 type Member = { userId: string; email: string; displayName: string; role: Role; createdAt: string };
+type AuthMode = 'signin' | 'signup' | 'reset';
 
 class ApiRequestError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
@@ -199,12 +201,19 @@ export default function Page() {
   const [members, setMembers] = useState<Member[]>([]);
   const [owner, setOwner] = useState<Member | null>(null);
   const [loading, setLoading] = useState(true);
+  const [authMode, setAuthMode] = useState<AuthMode>('signin');
+  const [demoEnabled, setDemoEnabled] = useState(false);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authName, setAuthName] = useState('');
+  const [authNotice, setAuthNotice] = useState('');
   const editorRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<DocumentData | null>(active);
-  activeRef.current = active;
+  useEffect(() => { activeRef.current = active; }, [active]);
   const fileRef = useRef<HTMLInputElement>(null);
   const saveTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const pending = useRef(new Map<string, { id: string; title: string; content: TipTapDoc; baseUpdatedAt: string }>());
+  const persistRef = useRef<(item: { id: string; title: string; content: TipTapDoc; baseUpdatedAt: string }) => Promise<void>>(async () => undefined);
   const drainPromise = useRef<Promise<void> | null>(null);
   const openSequence = useRef(0);
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -262,6 +271,9 @@ export default function Page() {
   useEffect(() => {
     let alive = true;
     const openWorkspace = async () => {
+      void api<{ demoMode: boolean }>('/api/auth/options', undefined, 5000).then((options) => {
+        if (alive) setDemoEnabled(options.demoMode);
+      }).catch(() => undefined);
       try {
         const me = await api<{ user: User }>('/api/me', undefined, 5000);
         if (!alive) return;
@@ -299,7 +311,7 @@ export default function Page() {
     (filter === 'all' || doc.ownership === filter) && doc.title.toLowerCase().includes(query.toLowerCase()),
   ), [documents, filter, query]);
 
-  const signIn = async (email: string) => {
+  const demoSignIn = async (email: string) => {
     setBusy(true); setError('');
     try {
       const result = await api<{ user: User }>('/api/auth/demo-login', {
@@ -312,8 +324,36 @@ export default function Page() {
     finally { setBusy(false); setLoading(false); }
   };
 
+  const submitAuth = async (event: FormEvent) => {
+    event.preventDefault(); setBusy(true); setError(''); setAuthNotice('');
+    try {
+      if (authMode === 'reset') {
+        const result = await authClient.requestPasswordReset({
+          email: authEmail,
+          redirectTo: `${window.location.origin}/reset-password`,
+        });
+        if (result.error) throw new Error(result.error.message ?? 'Could not request a password reset.');
+        setAuthNotice('If an account uses that email, a reset link is on its way.');
+      } else if (authMode === 'signup') {
+        const result = await authClient.signUp.email({ name: authName, email: authEmail, password: authPassword });
+        if (result.error) throw new Error(result.error.message ?? 'Could not create your account.');
+        setAuthNotice('Check your inbox for a verification link before signing in.');
+        setAuthMode('signin'); setAuthPassword('');
+      } else {
+        const result = await authClient.signIn.email({ email: authEmail, password: authPassword });
+        if (result.error) throw new Error(result.error.message ?? 'Could not sign in.');
+        const session = await api<{ user: User }>('/api/me');
+        setUser(session.user); setLoading(false); setAuthPassword('');
+        await refreshList();
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Authentication failed. Please try again.');
+    } finally { setBusy(false); }
+  };
+
   const signOut = async () => {
     openSequence.current += 1;
+    await authClient.signOut().catch(() => undefined);
     try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* Clear the local session view either way. */ }
     setUser(null); setDocuments([]); setActive(null); setTitle(''); setSaveState('idle'); setRecoveryDraft(null);
   };
@@ -397,8 +437,7 @@ export default function Page() {
     drainPromise.current = running;
     return running;
   }, []);
-  const persistRef = useRef(persist);
-  persistRef.current = persist;
+  useEffect(() => { persistRef.current = persist; }, [persist]);
   const queueSave = useCallback((nextTitle: string, nextContent: TipTapDoc) => {
     if (!active || active.role === 'viewer') return;
     const item = { id: active.id, title: nextTitle.trim() || 'Untitled document', content: nextContent, baseUpdatedAt: active.updatedAt };
@@ -522,12 +561,19 @@ export default function Page() {
         <div className="brand-mark">a</div><p className="eyebrow">YOUR SHARED WORKSPACE</p>
         <h1>Good ideas<br />start somewhere.</h1>
         <p className="login-copy">A calm space for the notes, plans, and documents you make with your team.</p>
-        <div className="login-actions">
-          <p className="field-label">Enter the demo workspace as</p>
-          <button className="person-choice" disabled={busy} onClick={() => void signIn('alex@demo.local')}><span className="avatar avatar-gold">A</span><span><b>Alex Demo</b><small>alex@demo.local · owner</small></span><span className="choice-arrow">↗</span></button>
-          <button className="person-choice" disabled={busy} onClick={() => void signIn('sam@demo.local')}><span className="avatar avatar-blue">S</span><span><b>Sam Demo</b><small>sam@demo.local · collaborator</small></span><span className="choice-arrow">↗</span></button>
-          <p className="demo-note">Demo access only · no password needed</p>
-        </div>
+        <form className="login-actions auth-form" onSubmit={(event) => void submitAuth(event)}>
+          <p className="field-label">{authMode === 'signup' ? 'CREATE YOUR ACCOUNT' : authMode === 'reset' ? 'RESET YOUR PASSWORD' : 'SIGN IN TO YOUR ACCOUNT'}</p>
+          {authMode === 'signup' && <input autoComplete="name" required maxLength={100} value={authName} onChange={(event) => setAuthName(event.target.value)} placeholder="Your name" aria-label="Your name" />}
+          <input type="email" autoComplete="email" required value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="Email address" aria-label="Email address" />
+          {authMode !== 'reset' && <input type="password" autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'} required minLength={8} maxLength={128} value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} placeholder="Password (at least 8 characters)" aria-label="Password" />}
+          <button className="primary-button auth-submit" disabled={busy}>{authMode === 'signup' ? 'Create account' : authMode === 'reset' ? 'Send reset link' : 'Sign in'}</button>
+          {authNotice && <p className="auth-notice" role="status">{authNotice}</p>}
+          <div className="auth-links">
+            {authMode === 'signin' && <><button type="button" onClick={() => { setAuthMode('reset'); setError(''); setAuthNotice(''); }}>Forgot password?</button><button type="button" onClick={() => { setAuthMode('signup'); setError(''); setAuthNotice(''); }}>Create an account</button></>}
+            {authMode !== 'signin' && <button type="button" onClick={() => { setAuthMode('signin'); setError(''); setAuthNotice(''); }}>Back to sign in</button>}
+          </div>
+        </form>
+        {demoEnabled && <div className="demo-actions"><p className="field-label">DEMO WORKSPACE</p><button className="person-choice" disabled={busy} onClick={() => void demoSignIn('alex@demo.local')}><span className="avatar avatar-gold">A</span><span><b>Alex Demo</b><small>alex@demo.local · demo only</small></span><span className="choice-arrow">↗</span></button><button className="person-choice" disabled={busy} onClick={() => void demoSignIn('sam@demo.local')}><span className="avatar avatar-blue">S</span><span><b>Sam Demo</b><small>sam@demo.local · demo only</small></span><span className="choice-arrow">↗</span></button></div>}
         {error && <p className="error-message">{error}</p>}
         <div className="login-footer">Ajaia <span>·</span> Notes, made together</div>
       </div>

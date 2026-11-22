@@ -6,6 +6,7 @@ owner/editor/viewer sharing, and `.txt` or Markdown import.
 ## Features
 
 - Create, rename, edit, save, and reopen documents.
+- Sign up with an email and password, verify your email, sign in, and recover a forgotten password.
 - Format text as bold, italic, underlined, headings, and bulleted or numbered lists.
 - Import `.txt`, `.md`, and `.markdown` files up to 1 MB. The server validates and
   converts the file; uploaded HTML is not rendered as trusted content.
@@ -57,7 +58,11 @@ For Turso, set the database URL and a newly-created auth token in `.env.local`:
 ```dotenv
 TURSO_DATABASE_URL=libsql://your-database-your-org.turso.io
 TURSO_AUTH_TOKEN=your-private-token
-DEMO_MODE=true
+BETTER_AUTH_SECRET=generate-a-random-secret-at-least-32-characters
+BETTER_AUTH_URL=http://localhost:3000
+RESEND_API_KEY=your-resend-api-key
+AUTH_EMAIL_FROM=Ajaia <accounts@your-verified-domain.com>
+DEMO_MODE=false
 ```
 
 If the Turso variables are omitted, the app uses a local SQLite file named
@@ -68,6 +73,10 @@ If the Turso variables are omitted, the app uses a local SQLite file named
 |---|---|---|
 | `TURSO_DATABASE_URL` | Turso/libSQL connection URL | Local SQLite by default |
 | `TURSO_AUTH_TOKEN` | Turso database token | Not needed for local SQLite |
+| `BETTER_AUTH_SECRET` | Secret used to sign and encrypt authentication data | Local-only fallback outside production |
+| `BETTER_AUTH_URL` | Public application origin used in account links | `http://localhost:3000` |
+| `RESEND_API_KEY` | Resend key used to deliver verification and reset email | Local development logs links if omitted |
+| `AUTH_EMAIL_FROM` | Verified sender address for account email | Required for production |
 | `TEST_TURSO_DATABASE_URL` | Optional isolated test URL | Local SQLite by default |
 | `DEMO_MODE` | Enables the demo account switcher | `false` |
 | `MAX_UPLOAD_BYTES` | Maximum import file size | `1048576` (1 MB) |
@@ -96,7 +105,7 @@ The project allows the local browser host `192.168.56.1` for development resourc
 you access the dev server through a different LAN host, add that host to
 `allowedDevOrigins` in `next.config.ts` and restart the dev server.
 
-## Vercel public demo deployment
+## Vercel deployment
 
 Connect `uni-gamemaker/agaia-project` to the Vercel project and add these environment
 variables for Preview and Production:
@@ -105,17 +114,22 @@ variables for Preview and Production:
 |---|---|
 | `TURSO_DATABASE_URL` | Your Turso `libsql://...` database URL |
 | `TURSO_AUTH_TOKEN` | A newly rotated Turso database token |
-| `DEMO_MODE` | `true` for the requested public demo |
+| `BETTER_AUTH_SECRET` | Random secret with at least 32 characters |
+| `BETTER_AUTH_URL` | Public application URL |
+| `RESEND_API_KEY` | Resend API key for account emails |
+| `AUTH_EMAIL_FROM` | Verified sender, for example `Ajaia <accounts@example.com>` |
+| `DEMO_MODE` | Set `true` only to expose public demo access |
 
-`vercel.json` runs `npm run vercel-build`, which validates the Turso settings, applies
-Drizzle migrations, idempotently seeds the two demo accounts, and builds Next.js. Since
-this deployment uses public demo accounts rather than real authentication, anyone can
-enter as Alex or Sam; use demo content only and do not store private documents.
+`vercel.json` runs `npm run vercel-build`, which validates Turso and authentication email
+settings, applies Drizzle migrations, idempotently seeds the isolated demo accounts, and
+builds Next.js. Keep `DEMO_MODE=false` for a private account-based workspace. Enabling it
+exposes those demo identities and their demo-owned documents to anyone who selects them.
 
 ## Demo accounts
 
-With `DEMO_MODE=true`, the start screen offers these seeded accounts. There are no
-passwords; the public demo switcher is **not production authentication**.
+With `DEMO_MODE=true`, the sign-in screen also offers these seeded accounts. They have no
+passwords and remain separate from real accounts. Registration reserves `@demo.local`
+addresses so nobody can claim a demo identity.
 
 | Email | Display name | Seeded role |
 |---|---|---|
@@ -131,6 +145,7 @@ All routes use JSON except file import, which uses `multipart/form-data`.
 
 | Method | Route | Access |
 |---|---|---|
+| `GET/POST` | `/api/auth/*` | Better Auth email/password, verification, sessions, recovery, and sign-out |
 | `GET` | `/api/health` | Public; reports database availability |
 | `POST` | `/api/auth/demo-login` | Demo mode only; sets an httpOnly session cookie |
 | `POST` | `/api/auth/logout` | Current session |

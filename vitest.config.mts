@@ -31,6 +31,14 @@ export default defineConfig({
     env: {
       TURSO_DATABASE_URL: 'file:./ajaia-test.db',
       TURSO_AUTH_TOKEN: '',
+      // The API suites authenticate through the legacy server-side demo session helper.
+      // Keep that mode explicit in tests, independent of the developer's .env.local.
+      DEMO_MODE: 'true',
+      // Keep account-flow tests on local URLs and force the development email logger.
+      BETTER_AUTH_URL: 'http://localhost:3000',
+      BETTER_AUTH_SECRET: 'vitest-only-secret-change-me-32-characters',
+      RESEND_API_KEY: '',
+      AUTH_EMAIL_FROM: '',
     },
   },
   resolve: {

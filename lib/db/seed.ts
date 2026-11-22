@@ -40,6 +40,9 @@ export async function truncateAll(): Promise<void> {
   const db = getDb();
   await db.delete(schema.documentMembers);
   await db.delete(schema.sessions);
+  await db.delete(schema.authVerifications);
+  await db.delete(schema.authSessions);
+  await db.delete(schema.authAccounts);
   await db.delete(schema.documents);
   await db.delete(schema.users);
 }
