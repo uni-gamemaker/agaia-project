@@ -337,7 +337,7 @@ export default function Page() {
       } else if (authMode === 'signup') {
         const result = await authClient.signUp.email({ name: authName, email: authEmail, password: authPassword });
         if (result.error) throw new Error(result.error.message ?? 'Could not create your account.');
-        setAuthNotice('Check your inbox for a verification link before signing in.');
+        setAuthNotice('Account created. Check your inbox for a verification link. If it does not arrive, use “Resend verification email” below.');
         setAuthMode('signin'); setAuthPassword('');
       } else {
         const result = await authClient.signIn.email({ email: authEmail, password: authPassword });
@@ -348,6 +348,24 @@ export default function Page() {
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Authentication failed. Please try again.');
+    } finally { setBusy(false); }
+  };
+
+  const resendVerification = async () => {
+    if (!authEmail.trim()) {
+      setError('Enter your email address first.');
+      return;
+    }
+    setBusy(true); setError(''); setAuthNotice('');
+    try {
+      const result = await authClient.sendVerificationEmail({
+        email: authEmail,
+        callbackURL: window.location.origin,
+      });
+      if (result.error) throw new Error(result.error.message ?? 'Could not send a verification email.');
+      setAuthNotice('If an unverified account uses this email, a verification link is on its way.');
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not send a verification email.');
     } finally { setBusy(false); }
   };
 
@@ -569,7 +587,7 @@ export default function Page() {
           <button className="primary-button auth-submit" disabled={busy}>{authMode === 'signup' ? 'Create account' : authMode === 'reset' ? 'Send reset link' : 'Sign in'}</button>
           {authNotice && <p className="auth-notice" role="status">{authNotice}</p>}
           <div className="auth-links">
-            {authMode === 'signin' && <><button type="button" onClick={() => { setAuthMode('reset'); setError(''); setAuthNotice(''); }}>Forgot password?</button><button type="button" onClick={() => { setAuthMode('signup'); setError(''); setAuthNotice(''); }}>Create an account</button></>}
+            {authMode === 'signin' && <><button type="button" onClick={() => { setAuthMode('reset'); setError(''); setAuthNotice(''); }}>Forgot password?</button><button type="button" onClick={() => void resendVerification()} disabled={busy}>Resend verification email</button><button type="button" onClick={() => { setAuthMode('signup'); setError(''); setAuthNotice(''); }}>Create an account</button></>}
             {authMode !== 'signin' && <button type="button" onClick={() => { setAuthMode('signin'); setError(''); setAuthNotice(''); }}>Back to sign in</button>}
           </div>
         </form>
