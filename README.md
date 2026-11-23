@@ -60,10 +60,14 @@ TURSO_DATABASE_URL=libsql://your-database-your-org.turso.io
 TURSO_AUTH_TOKEN=your-private-token
 BETTER_AUTH_SECRET=generate-a-random-secret-at-least-32-characters
 BETTER_AUTH_URL=http://localhost:3000
-RESEND_API_KEY=your-resend-api-key
-AUTH_EMAIL_FROM=Ajaia <accounts@your-verified-domain.com>
+GMAIL_USER=your-gmail-address@gmail.com
+GMAIL_APP_PASSWORD=your-16-character-app-password
 DEMO_MODE=false
 ```
+
+Gmail sending requires 2-Step Verification and a Google App Password. Store the
+16-character App Password without spaces in `GMAIL_APP_PASSWORD`; never use your normal
+Google password. The app sends verification and password-reset mail from `GMAIL_USER`.
 
 If the Turso variables are omitted, the app uses a local SQLite file named
 `ajaia-local.db`. Tests use a separate local file and never connect to production. The
@@ -75,8 +79,8 @@ If the Turso variables are omitted, the app uses a local SQLite file named
 | `TURSO_AUTH_TOKEN` | Turso database token | Not needed for local SQLite |
 | `BETTER_AUTH_SECRET` | Secret used to sign and encrypt authentication data | Local-only fallback outside production |
 | `BETTER_AUTH_URL` | Public application origin used in account links | `http://localhost:3000` |
-| `RESEND_API_KEY` | Resend key used to deliver verification and reset email | Local development logs links if omitted |
-| `AUTH_EMAIL_FROM` | Verified sender address for account email | Required for production |
+| `GMAIL_USER` | Gmail address used to send account emails | Local development logs links if omitted |
+| `GMAIL_APP_PASSWORD` | Google App Password for Gmail SMTP | Local development logs links if omitted |
 | `TEST_TURSO_DATABASE_URL` | Optional isolated test URL | Local SQLite by default |
 | `DEMO_MODE` | Enables the demo account switcher | `false` |
 | `MAX_UPLOAD_BYTES` | Maximum import file size | `1048576` (1 MB) |
@@ -116,13 +120,14 @@ variables for Preview and Production:
 | `TURSO_AUTH_TOKEN` | A newly rotated Turso database token |
 | `BETTER_AUTH_SECRET` | Random secret with at least 32 characters |
 | `BETTER_AUTH_URL` | Public application URL |
-| `RESEND_API_KEY` | Resend API key for account emails |
-| `AUTH_EMAIL_FROM` | Verified sender, for example `Ajaia <accounts@example.com>` |
+| `GMAIL_USER` | Gmail address used to send account emails |
+| `GMAIL_APP_PASSWORD` | Google App Password for Gmail SMTP |
 | `DEMO_MODE` | Set `true` only to expose public demo access |
 
 `vercel.json` runs `npm run vercel-build`, which validates Turso and authentication email
 settings, applies Drizzle migrations, idempotently seeds the isolated demo accounts, and
-builds Next.js. Keep `DEMO_MODE=false` for a private account-based workspace. Enabling it
+builds Next.js. Set the Gmail variables for both Preview and Production if account emails
+should work in both environments. Keep `DEMO_MODE=false` for a private account-based workspace. Enabling it
 exposes those demo identities and their demo-owned documents to anyone who selects them.
 
 ## Demo accounts

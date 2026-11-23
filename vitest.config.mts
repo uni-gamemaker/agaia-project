@@ -37,8 +37,8 @@ export default defineConfig({
       // Keep account-flow tests on local URLs and force the development email logger.
       BETTER_AUTH_URL: 'http://localhost:3000',
       BETTER_AUTH_SECRET: 'vitest-only-secret-change-me-32-characters',
-      RESEND_API_KEY: '',
-      AUTH_EMAIL_FROM: '',
+      GMAIL_USER: '',
+      GMAIL_APP_PASSWORD: '',
     },
   },
   resolve: {
